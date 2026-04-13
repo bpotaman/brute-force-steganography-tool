@@ -5,47 +5,11 @@ import os
 import numpy as np
 
 """
-add the right error message, when embedded message too large
+1. Use exceptions instead of killing the process (read about exceptions as well).
+2. Take a closer look at colorType. It's slightly wrong in this program.
+3. I think naming of width and height may be confusing. Image array are likely the other way around. Code works though.
+4. Try to put width and height as metadata in the secret.png. 
 """
-
-def set_lsb(value):
-    return value | np.uint8(0b00000001)
-
-def clear_lsb(value):
-    return value & np.uint8(0b11111110) 
-
-def set_bit(value, bit):
-    return value | (np.uint8(0b00000001) << bit) 
-
-def _flatten(values):
-    if isinstance(values, np.ndarray):
-        yield values.flatten()
-    else:
-        for value in values:
-            yield from _flatten(value)
-
-def flatten(values):
-    # flatten nested lists of np.ndarray to np.ndarray
-    return np.concatenate(list(_flatten(values)))
-
-def _unflatten(flat_values, prototype, offset):
-    if isinstance(prototype, np.ndarray):
-        shape = prototype.shape
-        new_offset = offset + np.prod(shape)
-        value = flat_values[offset:new_offset].reshape(shape)
-        return value, new_offset
-    else:
-        result = []
-        for value in prototype:
-            value, offset = _unflatten(flat_values, value, offset)
-            result.append(value)
-        return result, offset
-
-def unflatten(flat_values, prototype):
-    # unflatten np.ndarray to nested lists with structure of prototype
-    result, offset = _unflatten(flat_values, prototype, 0)
-    assert(offset == len(flat_values))
-    return result
 
 def is_png(file_name):
     return file_name.split('.')[-1] == "png"
@@ -73,14 +37,14 @@ def embed(carrier_file_name, embed_file_name):
     # read the carrier image and embedded image
     carrier_prototype = read_image(carrier_file_name)
     embed_prototype = read_image(embed_file_name) 
-    
     # colot_type is crucial, when extracting the embedded image
     color_type = get_color_type(embed_prototype)
 
     # I'll flatten them to make looping easier
-    embed_flat = flatten(embed_prototype)
-    carrier_flat = flatten(carrier_prototype)
+    embed_flat = embed_prototype.reshape(-1)
+    carrier_flat = carrier_prototype.reshape(-1)
     
+
     # image can only be hidden using the LSB technique iff the carrier image is at least 8 times bigger
     if len(embed_flat) * 8 > len(carrier_flat):
         max_size = len(carrier_flat) / (8 * 10**6)
@@ -93,20 +57,18 @@ def embed(carrier_file_name, embed_file_name):
 
     print(f"Embedding a secret image of size {embed_prototype.shape[0]}x{embed_prototype.shape[1]}...")
     
-    mask = np.uint8(0b10000000)  # used for extracting each bit
-    i = 0  # points to the rgb value in a carrier image (pixels that consist of rgb values are also flattened)
-    for rgb_val_embed in embed_flat: # go through all rgb values 
-        for j in range(8):  # go through all bits in an rgb value in a pixel in an embedded image
-            bit_rgb_val_embed = rgb_val_embed & (mask >> j)  # get the (7 - j)th bit of rgb value in pixel in embedded image
-            if bit_rgb_val_embed:
-                carrier_flat[i] = set_lsb(carrier_flat[i])
-            else:
-                 carrier_flat[i] = clear_lsb(carrier_flat[i])
-            i += 1
+    # turns each uint8 into an array of bits
+    carrier_flat_bits = np.unpackbits(carrier_flat)
+    embed_flat_bits = np.unpackbits(embed_flat)
+    
+    # 7, 15, 23, ..., embed_flat_bits.shape[0] * 8
+    # you have to multiply by 8, because, you're taking every 8th index
+    carrier_flat_bits[7 : embed_flat_bits.shape[0] * 8 : 8] = embed_flat_bits
+    carrier_flat = np.packbits(carrier_flat_bits)
     
     # unflatten
-    pixels_final = unflatten(carrier_flat, carrier_prototype)
-     
+    pixels_final = carrier_flat.reshape(carrier_prototype.shape)
+    
     # save
     im = Image.fromarray(pixels_final) 
     im.save("secret.png")
@@ -121,29 +83,22 @@ def extract(file_name, width, height):
     if not is_png(file_name):
         print("Error: This program can only deal with .png files.")
         exit()
-
-    # image containing the secret
-    secret_prototype = read_image(file_name) 
-    secret_flat = flatten(secret_prototype)
     
+    # read the colorType
     with open(file_name, "rb") as f:
         lines = f.readlines()
         color_type = int(chr(lines[-1][-1]))  # read the last byte
-    
-    # this array will hold rgb values of the secret image
-    reveal_flat = np.zeros(width * height * color_type, dtype=np.uint8)
-    
-    mask = np.uint8(0b00000001)  # used to extract the LSB
-    i = 0  # points to rgb in the image we're recovering from
-    for k in range(width * height * color_type):  # here we're writing to reveal_flat
-        for j in range(8):  # assemble each rgb value bit by bit
-            if (secret_flat[i] & mask) == 1: # our array is already all 0s, so we only flip bits to 1s when we have to  
-                reveal_flat[k] = set_bit(reveal_flat[k], 7 - j)
-            i += 1
    
-   # unflatten
-    reveal_prototype = np.zeros((width, height, color_type))
-    reveal = unflatten(reveal_flat, reveal_prototype)
+    # read the secret image, flatten it and convert decimal to binary
+    secret_flat = read_image(file_name).reshape(-1) 
+    secret_flat_bits = np.unpackbits(secret_flat)
+
+    # read the LSB from the secret image
+    reveal_flat_bits = secret_flat_bits[7 : width * height * color_type * 8 * 8 : 8]
+    reveal_flat = np.packbits(reveal_flat_bits)  # from binary to decimal
+   
+    # unflatten - revert to the original shape
+    reveal = reveal_flat.reshape((width, height, color_type))
     
     # save
     im = Image.fromarray(reveal)
