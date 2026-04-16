@@ -8,7 +8,7 @@ from errors import *
 """ 1. Parsing is very fragile. Find methods in Image that'll parse metadata reliably. The struct library might be helpful.
     2. Consider storing metadata in a tEXT or zTXt chunk.
     3. Consider dividing this code into multiple source files.
-    4. Read about &= and |= in numpy.
+    4. Read about &= and |= in numpy. 
 """
 
 def is_png(file_name):
