@@ -1,3 +1,4 @@
 src/*.png
 src/t.py
 src/test.py
+src/__pycache__
