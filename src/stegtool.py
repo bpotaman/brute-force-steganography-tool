@@ -4,22 +4,24 @@ from PIL import Image, ImageFile
 import os
 import numpy as np
 from errors import *
+import struct
 
-""" 1. Parsing is very fragile. Find methods in Image that'll parse metadata reliably. The struct library might be helpful.
-    2. Consider storing metadata in a tEXT or zTXt chunk.
-    3. Consider dividing this code into multiple source files.
-    4. Read about &= and |= in numpy. 
-"""
 
 def is_png(file_name):
     return file_name.split('.')[-1].lower() == "png"
 
 def get_color_type(file_name):
-    with open(file_name, "rb") as f:
-        lines = f.read()
-        color_type = lines[25]
-    if color_type != 2 and color_type != 6:
-        raise ColorTypeError(f"This program is unable to handle colorType = {color_type}. Choose a file with colorType equal to 2 or 6.")
+    im = Image.open(file_name)
+    
+    # set color_type to an int, according to the standard (makes it easier for me to struct.pack it)
+    color_type = 0
+    if im.mode == "RGB":
+        color_type = 2
+    elif im.mode == "RGBA":
+        color_type = 6
+    else:
+        raise ColorTypeError(f"This program is unable to handle colorType {im.mode}. Choose a file with colorType RGB or RGBA")
+    
     return color_type
 
 
@@ -29,49 +31,21 @@ def read_image(file_name):
 
 
 def read_metadata(file_name):
-    i = -1
-    buff = np.array([])
     with open(file_name, "rb") as f:
         lines = f.read()
-        # If someone provides an incorrect file, it'll loop until index out of bounds. Try to mitigate that.
-        while lines[i] != 46:  # this is a dot in ASCII
-            buff = np.append(buff, lines[i])
-            i += -1
-            if i < -100:
-                raise MetadataError(f"`{file_name}` doesn't contain the metadata required to extract the hidden image. Are you sure {file_name} is the correct file?")
-        buff = np.flip(buff)
-        buff = [chr(int(digit)) for digit in buff]
-        metadata_len = int("".join(buff))
+        metadata = struct.unpack(">4sBHH", lines[-9:])  # metadata is 9 bytes in length
+        if b"goob" != metadata[0]:
+            raise MetadataError(f"Incomplete metadata. Are you sure `{file_name}` is the file you want to extract?")
         
-        metadata = lines[i - metadata_len : i]
-        metadata = [chr(m) for m in metadata]
-        metadata = "".join(metadata)
-        metadata = metadata.split('.')
-        metadata = [int(m) for m in metadata]
-        return metadata
-        
+    return metadata
+
 
 def write_metadata(file_name, color_type, width, height):
-    color_type_ascii = str(color_type).encode("ASCII")
-    width_ascii = str(width).encode("ASCII")
-    height_ascii = str(height).encode("ASCII")
-    separator = '.'.encode("ASCII")
+    metadata = struct.pack(">4sBHH", b"goob", color_type, width, height)
 
-    metadata_len = len(color_type_ascii) + len(width_ascii) + len(height_ascii) + 2 # for two dots: color_type.width.height
-    metadata_len_ascii = str(metadata_len).encode("ASCII")
-    
     # Recall that this'll be after the IEND chunk, hence won't be visible.
-    # those 3 values will be separated by dots
     with open(file_name, "ab") as f:
-        f.write(separator)
-        f.write(color_type_ascii)
-        f.write(separator)
-        f.write(width_ascii)
-        f.write(separator)
-        f.write(height_ascii)
-        f.write(separator)
-        f.write(metadata_len_ascii)
-        
+        f.write(metadata)   
 
 def embed(carrier_file_name, embed_file_name):
     if not is_png(carrier_file_name) or not is_png(embed_file_name):
@@ -117,7 +91,7 @@ def extract(file_name):
     if not is_png(file_name):
         raise FileExtensionError("This program can only deal with .png files.")
     
-    color_type, width, height = read_metadata(file_name)
+    _, color_type, width, height = read_metadata(file_name)
     
     # if color_type = 2, then a pixel is (R, G, B), if it's 6, then (R, G, B, A)
     pixel_len = 3 if color_type == 2 else 4
